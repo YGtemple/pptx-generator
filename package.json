@@ -1,0 +1,14 @@
+{
+  "name": "pptx-generator",
+  "version": "1.0.0",
+  "description": "用 pptxgenjs 程序化生成演示文稿：虚拟节点树 + 绝对坐标扁平化 + matplotlib 算法可视化配图",
+  "scripts": {
+    "gen": "node gen-ppt/gen_ppt.js"
+  },
+  "keywords": ["pptxgenjs", "powerpoint", "presentation", "matplotlib", "visualization"],
+  "license": "MIT",
+  "dependencies": {
+    "pptxgenjs": "^3.12.0",
+    "jszip": "^3.10.0"
+  }
+}
