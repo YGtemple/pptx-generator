@@ -1,23 +1,32 @@
-# pptx-generator · 程序化演示文稿生成
+<div align="right">
 
-> 一句话简介：用 `pptxgenjs` 以代码生成演示文稿——虚拟节点树自动算坐标 + matplotlib 算法可视化配图。
+**[English](README.md)** · [简体中文](README.zh-CN.md)
 
-配套的 Word 版本：[docx-generator](https://github.com/YGtemple/docx-generator)
+</div>
 
-## 一、核心机制：虚拟节点树
+# pptx-generator
 
-用 `pptxgenjs` 排版最烦的是**坐标要手算**。想在一个卡片里放标题和正文，得先知道卡片的绝对位置，再算标题相对页面的坐标——卡片一挪，里面所有元素都得跟着改。
+Generate presentations in code — a virtual node tree computes coordinates, plus matplotlib figures for the diagrams.
 
-这套工具用**虚拟节点树 + 一次性扁平化**解决：
+<sub>JavaScript · Python · `pptxgenjs` + `matplotlib`</sub>
+
+---
+
+## The problem: coordinates you have to do by hand
+
+`pptxgenjs` wants every element at an absolute position. Put text inside a card and you first locate the card, then work out the text's position relative to the page. Move the card and everything inside it has to be recalculated.
+
+This library removes that.
+
+### Virtual nodes
 
 ```js
 function createVirtualNode(type, data, parentX = 0, parentY = 0) {
   const opts = data.opts || {};
   const node = {
     type, data,
-    absX: parentX + (opts.x || 0),   // 累加父级坐标
+    absX: parentX + (opts.x || 0),   // parent offset accumulates here
     absY: parentY + (opts.y || 0),
-    w: opts.w || 0, h: opts.h || 0,
     children: []
   };
 
@@ -26,14 +35,14 @@ function createVirtualNode(type, data, parentX = 0, parentY = 0) {
     node.children.push(child);
     return child;
   };
-  // addText / addImage / addTable 同理
+  // addText / addImage / addTable follow the same pattern
   return node;
 }
 ```
 
-关键在 `absX: parentX + (opts.x || 0)`——**每层的相对坐标在创建时就累加成绝对坐标**。嵌套三层也不会算错。
+The line that matters is `absX: parentX + (opts.x || 0)`. Each level's relative offset resolves into an absolute position **at construction time**, so nesting any number of levels stays correct.
 
-写完结构后一次性展开：
+The tree is flattened once, at the end:
 
 ```js
 function flattenNode(node, realSlide, pres) {
@@ -42,25 +51,23 @@ function flattenNode(node, realSlide, pres) {
   else if (node.type === 'text')  realSlide.addText(node.data.text, absOpts);
   else if (node.type === 'image') realSlide.addImage(absOpts);
   else if (node.type === 'table') realSlide.addTable(node.data.tableData, absOpts);
-  node.children.forEach(child => flattenNode(child, realSlide, pres));   // 递归
+  node.children.forEach(child => flattenNode(child, realSlide, pres));
 }
 ```
 
-`addSlide` 也被 hook 了一层：返回虚拟 slide 而非真实 slide，等 `flattenNode` 时才真正写入。这样「布局」和「输出」两个阶段完全分开——布局阶段随便试错，不影响已生成的 pptx。
+`addSlide` is wrapped too: it returns a virtual slide rather than a real one, and nothing is written until `render()` runs. Layout and output become separate phases — the layout phase can be wrong as many times as it needs to be.
 
-## 二、两个细节
+## Two details worth keeping
 
-### 自动剔除手写的项目符号
+### Stripping hand-written bullets
 
 ```js
 const bulletRe = /^(?:[\u2022\u2023\u25E6\u2043\u2219\u00B7\u25CF\u25CB\u2013\u2014]\s*|\-\s+)/;
 ```
 
-`pptxgenjs` 的 `bullet: true` 会自己画项目符号。如果文本里已经手写了 `•`，渲染出来就是「• • 内容」两个点。
+`pptxgenjs` draws its own bullet when `bullet: true`. If the text already starts with `•`, you get two. The regex covers nine common bullet characters plus `- ` and strips them before they reach `addText`.
 
-这个正则覆盖 9 种常见项目符号字符（实心圆点 •、三角 ‣、空心圆 ◦、连字符变体 ⁃、圆点运算符 ∙、间隔号 ·、实心大圆 ●、空心大圆 ○、短破折号 –、长破折号 —）以及 `- ` 写法，在传给 `addText` 前统一剥掉。
-
-### 文本框默认 shrink
+### `fit: "shrink"` as a default
 
 ```js
 node.addText = function(text, opts = {}) {
@@ -69,20 +76,20 @@ node.addText = function(text, opts = {}) {
 }
 ```
 
-`fit: "shrink"` 让文字在超出文本框时自动缩小而不是溢出。作为**默认值**（注意展开顺序：`...opts` 在后，调用方仍可覆盖），能避免大部分「中文比英文宽、结果溢出卡片」的情况。
+Text shrinks to fit rather than overflowing. As a default (note `...opts` comes last, so callers can override), this removes most of the "Chinese is wider than Latin, so it spills out of the card" cases.
 
-## 三、配色系统
+## Colour
 
-每份 PPT 一套独立的配色令牌，按主题命名：
+Each deck carries one set of tokens, named after its theme:
 
 ```js
-// Ocean Gradient（海洋渐变）—— 算法题解用
+// Ocean Gradient — algorithm walkthroughs
 const C = {
   primary:   '065A82',
   secondary: '1C7293',
   accent:    '21295C',
   bg:        'F0F7FA',
-  // 代码块专用配色（深底 + VSCode 风格语法色）
+  // code blocks get their own set — dark ground, VSCode syntax colours
   codeBg:      '1E2A3A',
   codeText:    'E0E0E0',
   codeKeyword: '569CD6',
@@ -92,60 +99,51 @@ const C = {
 };
 ```
 
-代码块配色是单独一组：深色底 `1E2A3A` 配 VSCode Dark+ 的语法高亮色（关键字蓝、字符串橙、注释绿、数字浅绿）。这样 PPT 里贴代码段时的观感与编辑器一致。
+`1E2A3A` with VSCode Dark+ syntax colours means code pasted into a slide looks like the editor it came from.
+
+Fonts are split three ways:
 
 ```js
-// Teal Horizon（青绿地平线）—— 项目路演用
-const C = {
-  navy: '0A2540', deepBlue: '0A4D68', teal: '088395',
-  brightTeal: '05BFDB', coral: 'FF6B6B', gold: 'FFD93D',
-  ...
-};
+const FONT_T = "Georgia";           // titles — serif, formal
+const FONT_B = "Calibri";           // body
+const FONT_CJK = "Microsoft YaHei"; // Chinese
 ```
 
-中英文字体分三档：
+## Algorithm figures
 
-```js
-const FONT_T = "Georgia";           // 标题（衬线，正式感）
-const FONT_B = "Calibri";           // 正文
-const FONT_CJK = "Microsoft YaHei"; // 中文
-```
-
-## 四、算法可视化配图
-
-PPT 里的算法示意图不是截图，而是 `matplotlib` 程序化画的：
+The diagrams are not screenshots — `matplotlib` draws them:
 
 ```python
 import matplotlib
-matplotlib.use('Agg')          # 无 GUI 后端，服务器可跑
+matplotlib.use('Agg')          # no GUI backend, runs headless
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'SimSun']
-plt.rcParams['axes.unicode_minus'] = False    # 负号正常显示
+plt.rcParams['axes.unicode_minus'] = False    # minus signs, not tofu
 ```
 
-`font.sans-serif` 指定中文字体链（雅黑 → 黑体 → 宋体 依次 fallback），`axes.unicode_minus = False` 解决中文环境下负号显示成方块的问题。这两行是 matplotlib 中文绘图必配。
+Those two `rcParams` lines are the minimum for CJK in matplotlib. The first gives a fallback chain (YaHei → SimHei → SimSun); the second stops minus signs rendering as boxes.
 
-配色与 PPT 令牌保持一致：
+Colours match the slide tokens:
 
 ```python
 COLORS = {
-    'one_color': '#065A82',    # 二进制矩阵里的 1
-    'zero_color': '#E8F4F8',   # 0
-    'neg_color': '#FDE8E8',    # -1（浅红）
-    'pos_color': '#D4E9F7',    # 正数（浅蓝）
-    'highlight': '#F9E795',    # 高亮（金）
+    'one_color':  '#065A82',    # 1 in a binary matrix
+    'zero_color': '#E8F4F8',    # 0
+    'neg_color':  '#FDE8E8',    # -1
+    'pos_color':  '#D4E9F7',    # positive values
+    'highlight':  '#F9E795',    # highlight
 }
 ```
 
-**语义化命名而非颜色名**——`one_color` / `neg_color` 而不是 `blue` / `red`。因为画的是算法数据结构（二进制矩阵、前缀和、单调栈），按**值的含义**配色比按颜色本身更清楚。
+Named by meaning, not by colour — these draw algorithm data structures (binary matrices, prefix sums), so `one_color` says more than `blue`.
 
-输出的 PNG 文件名带尺寸（`binary_vs_ternary_1000x500.png`），方便在 PPT 里按比例放置不用二次缩放。
+Output filenames carry their pixel size (`binary_vs_ternary_1000x500.png`), so placing them in a slide needs no second measurement.
 
-## 五、附带工具：移除 PPT 的「AI 生成」水印
+## Removing an "AI generated" watermark
 
-`remove_ai_tag.js` 是个独立后处理脚本。有些工具导出的 PPTX 会在母版里嵌入「AI 生成」标记，这个脚本直接改 zip 里的 XML：
+`remove_ai_tag.js` is a standalone post-processor. Some exporters embed the watermark in the slide master; the script edits the XML inside the pptx zip directly:
 
 ```js
 const zip = await JSZip.loadAsync(data);
@@ -154,51 +152,50 @@ const slideFiles = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.x
 for (const slideFile of slideFiles) {
   let content = await zip.file(slideFile).async("string");
   if (content.includes("AI 生成") || content.includes("AI\u751f\u6210")) {
-    // 删掉包含该文本的整个 <p:sp>（形状）元素
     content = content.replace(/<p:sp>[\s\S]*?AI\s*生成[\s\S]*?<\/p:sp>/g, "");
     zip.file(slideFile, content);
   }
 }
 ```
 
-除了 slides，还扫 `slideMasters` 和 `slideLayouts`——水印常藏在母版里，只改 slides 不够。
+Three things matter here:
 
-中文字符做了双重匹配（字面 `AI 生成` 和 Unicode 转义 `AI\u751f\u6210`），因为 XML 里中文可能以转义形式存储。正则里所有空格都用 `\s*` 容错——「AI 生成」「AI生成」「AI 生成」都可能出现。
+- It also scans `slideMasters` and `slideLayouts` — the watermark usually lives in the master, so touching only `slides/*.xml` misses it.
+- Chinese is matched both literally and as `\u` escapes, because XML may store either.
+- Spacing is tolerated (`AI\s*生成`) since exporters vary.
 
-## 六、文件结构
+## Layout
 
 ```
-├── gen-ppt/                     # 演示文稿生成脚本（每份对应一套主题）
-│   ├── gen_ppt.js               # Ocean Gradient 主题 · 算法题解
-│   ├── gen_ppt_v2.js            # 同上 · 修订版
-│   ├── gen_ppt2.js              # 同上 · 第二版
-│   ├── gen_ppt3_cn.js           # 纯中文版
-│   ├── gen_ppt_stamp.js         # 印章题专题
-│   ├── gen_ppt_salary.js        # 薪酬分析专题
-│   └── generate_ppt.js          # Teal Horizon 主题 · 项目路演
-├── gen-images/                  # matplotlib 算法可视化配图
-│   ├── gen_images.py            # 基础版
-│   ├── gen_images2.py
-│   ├── gen_images_v2.py         # 增强版
-│   ├── gen_images_salary.py     # 薪酬专题
-│   ├── gen_images_stamp.py      # 印章专题
-│   └── fix_images.py            # 批量修正尺寸/字体
-├── remove_ai_tag.js             # 移除 PPTX 内的「AI 生成」水印
-└── package.json
+gen-ppt/                 one script per theme
+├── gen_ppt.js           Ocean Gradient · algorithm walkthroughs
+├── gen_ppt_v2.js        same, revised
+├── gen_ppt2.js          same, second pass
+├── gen_ppt3_cn.js       Chinese only
+├── gen_ppt_stamp.js     seal/stamp topic
+├── gen_ppt_salary.js    salary analysis topic
+└── generate_ppt.js      Teal Horizon · project pitch
+gen-images/              matplotlib figures
+├── gen_images.py
+├── gen_images2.py
+├── gen_images_v2.py
+├── gen_images_salary.py
+├── gen_images_stamp.py
+└── fix_images.py
+remove_ai_tag.js
+package.json
 ```
 
-## 七、用法
+## Usage
 
 ```bash
 npm install pptxgenjs
-node gen-ppt/gen_ppt.js            # 生成 pptx
+node gen-ppt/gen_ppt.js
 
 pip install matplotlib numpy
-python gen-images/gen_images.py    # 生成配图 PNG
+python gen-images/gen_images.py
 ```
 
-生成逻辑都在脚本末尾的 `main()` 或顶层顺序调用里，改内容直接改脚本。
+## License
 
-## 许可证
-
-MIT License
+MIT
